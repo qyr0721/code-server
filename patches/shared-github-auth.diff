@@ -1,0 +1,100 @@
+AI: share GitHub auth secrets on server for multi-device single account
+Index: code-server/lib/vscode/src/vs/platform/secrets/common/secrets.ts
+===================================================================
+--- code-server.orig/lib/vscode/src/vs/platform/secrets/common/secrets.ts
++++ code-server/lib/vscode/src/vs/platform/secrets/common/secrets.ts
+@@ -138,75 +138,42 @@
+ 
+ 	get(key: string): Promise<string | undefined> {
+ 		return this._sequencer.queue(key, async () => {
+-			const storageService = await this.resolvedStorageService;
+-
+-			try {
+-				return await readEncryptedSecret(
+-					key,
+-					(fullKey) => this.getValueFromStorage(key, fullKey, storageService),
+-					// Don't decrypt if storage is in-memory or if encryption service is not available
+-					async (v) => {
+-						if (this._type === 'in-memory' || !await this._encryptionService.isEncryptionAvailable()) {
+-							return v;
+-						}
+-						return this._encryptionService.decrypt(v);
+-					},
+-					this._logService,
+-				);
+-			} catch (e) {
+-				this._logService.error(e);
+-				const fullKey = secretStorageKey(key);
+-				this._logService.trace('[secrets] deleting invalid secret for key:', fullKey);
+-				this.removeValueFromStorage(key, fullKey, storageService);
+-				this._logService.trace('[secrets] deleted invalid secret for key:', fullKey);
++			const response = await fetch(`/__cs_secret?key=${encodeURIComponent(key)}`);
++			if (!response.ok) {
+ 				return undefined;
+ 			}
++			const data = await response.json();
++			return data.value != null ? (data.value as string) : undefined;
+ 		});
+ 	}
+ 
+ 	set(key: string, value: string): Promise<void> {
+ 		return this._sequencer.queue(key, async () => {
+-			const storageService = await this.resolvedStorageService;
+-
+-			try {
+-				await writeEncryptedSecret(
+-					key,
+-					value,
+-					(fullKey, encrypted) => this.setValueInStorage(key, fullKey, encrypted, storageService),
+-					// Don't encrypt if storage is in-memory or if encryption service is not available
+-					async (v) => {
+-						if (this._type === 'in-memory' || !await this._encryptionService.isEncryptionAvailable()) {
+-							return v;
+-						}
+-						return this._encryptionService.encrypt(v);
+-					},
+-					this._logService,
+-				);
+-			} catch (e) {
+-				this._logService.error(e);
+-				throw e;
+-			}
++			await fetch('/__cs_secret', {
++				method: 'POST',
++				headers: { 'Content-Type': 'application/json' },
++				body: JSON.stringify({ key, value }),
++			});
+ 		});
+ 	}
+ 
+ 	delete(key: string): Promise<void> {
+ 		return this._sequencer.queue(key, async () => {
+-			const storageService = await this.resolvedStorageService;
+-
+-			const fullKey = secretStorageKey(key);
+-			this._logService.trace('[secrets] deleting secret for key:', fullKey);
+-			this.removeValueFromStorage(key, fullKey, storageService);
+-			this._logService.trace('[secrets] deleted secret for key:', fullKey);
++			await fetch('/__cs_secret', {
++				method: 'POST',
++				headers: { 'Content-Type': 'application/json' },
++				body: JSON.stringify({ key, value: null }),
++			});
+ 		});
+ 	}
+ 
+ 	keys(): Promise<string[]> {
+ 		return this._sequencer.queue('__keys__', async () => {
+-			const storageService = await this.resolvedStorageService;
+-			this._logService.trace('[secrets] fetching keys of all secrets');
+-			const allKeys = storageService.keys(StorageScope.APPLICATION, StorageTarget.MACHINE);
+-			this._logService.trace('[secrets] fetched keys of all secrets');
+-			return allKeys.filter(key => key.startsWith(SECRET_STORAGE_PREFIX)).map(key => key.slice(SECRET_STORAGE_PREFIX.length));
++			const response = await fetch('/__cs_secret_keys');
++			if (!response.ok) {
++				return [];
++			}
++			return (await response.json()) as string[];
+ 		});
+ 	}
+ 

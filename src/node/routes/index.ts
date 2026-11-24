@@ -2,6 +2,7 @@ import { logger } from "@coder/logger"
 import cookieParser from "cookie-parser"
 import * as express from "express"
 import { promises as fs } from "fs"
+import { readFileSync, writeFileSync } from "fs"
 import * as path from "path"
 import * as tls from "tls"
 import { Disposable } from "../../common/emitter"
@@ -11,7 +12,7 @@ import { App } from "../app"
 import { AuthType, DefaultedArgs } from "../cli"
 import { commit, rootPath } from "../constants"
 import { Heart } from "../heart"
-import { redirect } from "../http"
+import { ensureAuthenticated, redirect } from "../http"
 import { CoderSettings, SettingsProvider } from "../settings"
 import { UpdateProvider } from "../update"
 import { getMediaMime, paths } from "../util"
@@ -163,6 +164,42 @@ export const register = async (
     app.router.all("/login", (req, res) => redirect(req, res, "/", {}))
     app.router.all("/logout", (req, res) => redirect(req, res, "/", {}))
   }
+
+  // ==== shared secret storage: multi-device GitHub auth (single server-side account) ====
+  const sharedSecretFile = path.join(args["user-data-dir"], "shared-secrets.json")
+  const readSharedSecrets = (): Record<string, string> => {
+    try {
+      return JSON.parse(readFileSync(sharedSecretFile, "utf8"))
+    } catch {
+      return {}
+    }
+  }
+  const writeSharedSecrets = (data: Record<string, string>) => {
+    writeFileSync(sharedSecretFile, JSON.stringify(data))
+  }
+  app.router.get("/__cs_secret", ensureAuthenticated, (req, res) => {
+    const key = String(req.query.key || "")
+    const data = readSharedSecrets()
+    res.json({ value: Object.prototype.hasOwnProperty.call(data, key) ? data[key] : null })
+  })
+  app.router.post("/__cs_secret", ensureAuthenticated, (req, res) => {
+    const key = req.body?.key
+    if (typeof key !== "string" || !key) {
+      return res.status(400).json({ error: "missing key" })
+    }
+    const data = readSharedSecrets()
+    if (req.body.value === null || req.body.value === undefined) {
+      delete data[key]
+    } else {
+      data[key] = String(req.body.value)
+    }
+    writeSharedSecrets(data)
+    res.status(204).end()
+  })
+  app.router.get("/__cs_secret_keys", ensureAuthenticated, (_, res) => {
+    res.json(Object.keys(readSharedSecrets()))
+  })
+  // ==== end shared secret storage ====
 
   app.router.use("/update", update.router)
 
